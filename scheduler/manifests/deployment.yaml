@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: network-aware-scheduler
+  namespace: kube-system
+  labels:
+    app: network-aware-scheduler
+    component: scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: network-aware-scheduler
+  template:
+    metadata:
+      labels:
+        app: network-aware-scheduler
+        component: scheduler
+    spec:
+      serviceAccountName: network-aware-scheduler
+      priorityClassName: system-cluster-critical
+      containers:
+      - name: kube-scheduler
+        image: localhost:5000/network-aware-scheduler:v0.1.0
+        imagePullPolicy: Always
+        command:
+        - /usr/local/bin/kube-scheduler
+        - --config=/etc/kubernetes/scheduler-config.yaml
+        - --v=2
+        env:
+        - name: PROMETHEUS_URL
+          value: "http://prometheus.monitoring:9090"
+        - name: METRICS_TIMEOUT
+          value: "5"
+        - name: ENABLE_DEBUG
+          value: "true"
+        ports:
+        - containerPort: 10259
+          name: secure-port
+          protocol: TCP
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 10259
+            scheme: HTTPS
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 15
+          failureThreshold: 8
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 10259
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 15
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: config
+          mountPath: /etc/kubernetes
+          readOnly: true
+        - name: kubeconfig
+          mountPath: /etc/kubernetes/scheduler.conf
+          subPath: scheduler.conf
+          readOnly: true
+      hostNetwork: false
+      hostPID: false
+      volumes:
+      - name: config
+        configMap:
+          name: network-aware-scheduler-config
+          items:
+          - key: config.yaml
+            path: scheduler-config.yaml
+      - name: kubeconfig
+        secret:
+          secretName: network-aware-scheduler-kubeconfig
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: network-aware-scheduler
+  namespace: kube-system
+  labels:
+    app: network-aware-scheduler
+spec:
+  type: ClusterIP
+  ports:
+  - name: secure-port
+    port: 10259
+    targetPort: 10259
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app: network-aware-scheduler

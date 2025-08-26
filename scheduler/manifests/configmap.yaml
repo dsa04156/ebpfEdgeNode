@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: network-aware-scheduler-config
+  namespace: kube-system
+data:
+  config.yaml: |
+    apiVersion: kubescheduler.config.k8s.io/v1beta3
+    kind: KubeSchedulerConfiguration
+    profiles:
+    - schedulerName: network-aware-scheduler
+      plugins:
+        score:
+          enabled:
+          - name: NetworkAware
+          disabled:
+          - name: NodeResourcesFit  # Disable default scoring
+      pluginConfig:
+      - name: NetworkAware
+        args:
+          prometheusUrl: "http://prometheus.monitoring:9090"
+          metricsTimeout: 5
+          enableDebug: true
+          weights:
+            rtt_p99: 0.3
+            retrans_rate: 0.2
+            drop_rate: 0.2
+            runqlat_p95: 0.15
+            cpu_util: 0.15
+          scoreNormalization: "minmax"
+    clientConnection:
+      kubeconfig: "/etc/kubernetes/scheduler.conf"
+    leaderElection:
+      leaderElect: true
+      resourceNamespace: kube-system
+      resourceName: network-aware-scheduler

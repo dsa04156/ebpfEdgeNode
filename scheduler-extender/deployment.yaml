@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: network-aware-scheduler-extender
+  namespace: kube-system
+  labels:
+    app: network-aware-scheduler-extender
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: network-aware-scheduler-extender
+  template:
+    metadata:
+      labels:
+        app: network-aware-scheduler-extender
+    spec:
+      serviceAccountName: network-aware-scheduler-extender
+      containers:
+      - name: extender
+        image: golang:1.21-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          apk add --no-cache curl git
+          echo "Starting scheduler extender placeholder..."
+          cat > /tmp/main.go << 'EOF'
+          package main
+          import (
+            "encoding/json"
+            "fmt"
+            "log"
+            "net/http"
+            "math/rand"
+            "time"
+          )
+          
+          type NodeScore struct {
+            Name  string `json:"name"`
+            Score int64  `json:"score"`
+          }
+          
+          type PrioritizeRequest struct {
+            Nodes []string `json:"nodes"`
+          }
+          
+          type PrioritizeResponse struct {
+            NodeScores []NodeScore `json:"nodeScores"`
+          }
+          
+          func prioritize(w http.ResponseWriter, r *http.Request) {
+            var req PrioritizeRequest
+            if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+              http.Error(w, err.Error(), http.StatusBadRequest)
+              return
+            }
+            
+            var scores []NodeScore
+            for _, node := range req.Nodes {
+              // Simulate network-aware scoring
+              score := rand.Int63n(100)
+              scores = append(scores, NodeScore{Name: node, Score: score})
+            }
+            
+            resp := PrioritizeResponse{NodeScores: scores}
+            w.Header().Set("Content-Type", "application/json")
+            json.NewEncoder(w).Encode(resp)
+            log.Printf("Scored %d nodes", len(scores))
+          }
+          
+          func main() {
+            http.HandleFunc("/prioritize", prioritize)
+            log.Println("Scheduler extender listening on :8080")
+            log.Fatal(http.ListenAndServe(":8080", nil))
+          }
+          EOF
+          
+          cd /tmp && go mod init extender && go run main.go
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: PROMETHEUS_URL
+          value: "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+          limits:
+            memory: "512Mi"
+            cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: network-aware-scheduler-extender
+  namespace: kube-system
+  labels:
+    app: network-aware-scheduler-extender
+spec:
+  selector:
+    app: network-aware-scheduler-extender
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: network-aware-scheduler-extender
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: network-aware-scheduler-extender
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: network-aware-scheduler-extender
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: network-aware-scheduler-extender
+subjects:
+- kind: ServiceAccount
+  name: network-aware-scheduler-extender
+  namespace: kube-system

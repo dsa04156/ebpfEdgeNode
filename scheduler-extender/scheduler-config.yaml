@@ -1,0 +1,31 @@
+apiVersion: kubescheduler.config.k8s.io/v1beta3
+kind: KubeSchedulerConfiguration
+profiles:
+- schedulerName: default-scheduler
+  plugins:
+    score:
+      enabled:
+      - name: NodeResourcesFit
+      - name: NodeAffinity
+  extenders:
+  - urlPrefix: "http://network-aware-scheduler-extender.kube-system.svc.cluster.local:8080"
+    filterVerb: "filter"
+    prioritizeVerb: "prioritize"
+    weight: 100
+    nodeCacheCapable: false
+    ignoredResources: []
+    managedResources: []
+- schedulerName: network-aware-scheduler
+  plugins:
+    score:
+      enabled:
+      - name: NodeResourcesFit
+      - name: NodeAffinity
+  extenders:
+  - urlPrefix: "http://network-aware-scheduler-extender.kube-system.svc.cluster.local:8080"
+    filterVerb: "filter"
+    prioritizeVerb: "prioritize"
+    weight: 100
+    nodeCacheCapable: false
+    ignoredResources: []
+    managedResources: []

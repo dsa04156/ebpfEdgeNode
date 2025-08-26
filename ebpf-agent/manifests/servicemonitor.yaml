@@ -1,0 +1,32 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ebpf-edge-agent
+  namespace: observability
+  labels:
+    app: ebpf-edge-agent
+spec:
+  selector:
+    matchLabels:
+      app: ebpf-edge-agent
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ebpf-edge-agent-service
+  namespace: observability
+  labels:
+    app: ebpf-edge-agent
+spec:
+  selector:
+    app: ebpf-edge-agent
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  clusterIP: None

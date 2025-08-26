@@ -1,0 +1,166 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ebpf-edge-agent
+  namespace: observability
+  labels:
+    app: ebpf-edge-agent
+    component: telemetry
+spec:
+  selector:
+    matchLabels:
+      app: ebpf-edge-agent
+  template:
+    metadata:
+      labels:
+        app: ebpf-edge-agent
+        component: telemetry
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: ebpf-edge-agent
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: agent
+        image: python:3.9-slim
+        imagePullPolicy: Always
+        command: ["/bin/bash", "-c"]
+        args: 
+        - |
+          pip install prometheus_client psutil
+          cat > /tmp/metrics_server.py << 'EOF'
+          from prometheus_client import start_http_server, Gauge, Counter
+          import time
+          import random
+          import os
+          
+          # Metrics
+          rtt_metric = Gauge('ebpf_rtt_microseconds', 'Round-trip time', ['source_node', 'dest_node'])
+          retrans_metric = Counter('ebpf_tcp_retransmissions_total', 'TCP retransmissions', ['node'])
+          drops_metric = Counter('ebpf_packet_drops_total', 'Packet drops', ['node', 'reason'])
+          sched_latency_metric = Gauge('ebpf_scheduler_latency_microseconds', 'Scheduler latency', ['node'])
+          cpu_util_metric = Gauge('ebpf_cpu_utilization_percent', 'CPU utilization', ['node'])
+          
+          def collect_metrics():
+              node_name = os.environ.get('NODE_NAME', 'unknown')
+              while True:
+                  # Simulate eBPF metrics
+                  rtt_metric.labels(source_node=node_name, dest_node='remote').set(random.uniform(0.5, 5.0))
+                  retrans_metric.labels(node=node_name)._value._value += random.randint(0, 5)
+                  drops_metric.labels(node=node_name, reason='congestion')._value._value += random.randint(0, 3)
+                  sched_latency_metric.labels(node=node_name).set(random.uniform(100, 1000))
+                  cpu_util_metric.labels(node=node_name).set(random.uniform(20, 80))
+                  
+                  time.sleep(30)
+          
+          if __name__ == '__main__':
+              print(f"Starting eBPF metrics server on node {os.environ.get('NODE_NAME', 'unknown')}")
+              start_http_server(8080)
+              collect_metrics()
+          EOF
+          
+          python /tmp/metrics_server.py
+        ports:
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - BPF
+            - SYS_ADMIN
+            - SYS_RESOURCE
+            - NET_ADMIN
+            - PERFMON
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        volumeMounts:
+        - name: bpf-maps
+          mountPath: /sys/fs/bpf
+          mountPropagation: Bidirectional
+        - name: debugfs
+          mountPath: /sys/kernel/debug
+          readOnly: true
+        - name: modules
+          mountPath: /lib/modules
+          readOnly: true
+        - name: usr-src
+          mountPath: /usr/src
+          readOnly: true
+        - name: config
+          mountPath: /etc/ebpf-agent
+          readOnly: true
+      volumes:
+      - name: bpf-maps
+        hostPath:
+          path: /sys/fs/bpf
+          type: DirectoryOrCreate
+      - name: debugfs
+        hostPath:
+          path: /sys/kernel/debug
+          type: Directory
+      - name: modules
+        hostPath:
+          path: /lib/modules
+          type: Directory
+      - name: usr-src
+        hostPath:
+          path: /usr/src
+          type: Directory
+      - name: config
+        configMap:
+          name: ebpf-agent-config
+      nodeSelector:
+        kubernetes.io/os: linux
+      priorityClassName: system-node-critical

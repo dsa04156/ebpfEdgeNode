@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    name: observability
+    app.kubernetes.io/name: observability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ebpf-agent-config
+  namespace: observability
+data:
+  config.yaml: |
+    # eBPF Agent Configuration
+    metrics:
+      collection_interval: 5s
+      export_interval: 10s
+      histogram_buckets: 64
+    
+    telemetry:
+      sampling_rate: 100  # 1/100 for events
+      buffer_size: 1048576  # 1MB ring buffer
+    
+    prometheus:
+      port: 8080
+      path: /metrics
+    
+    logging:
+      level: info
+      format: json

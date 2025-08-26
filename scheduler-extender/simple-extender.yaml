@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: network-aware-scheduler-extender
+  namespace: kube-system
+  labels:
+    app: network-aware-scheduler-extender
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: network-aware-scheduler-extender
+  template:
+    metadata:
+      labels:
+        app: network-aware-scheduler-extender
+    spec:
+      serviceAccountName: network-aware-scheduler-extender
+      containers:
+      - name: extender
+        image: python:3.9-slim
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          cat > /tmp/scheduler_extender.py << 'EOF'
+          #!/usr/bin/env python3
+          import json
+          import random
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          from urllib.parse import urlparse, parse_qs
+          import time
+          
+          class SchedulerExtender(BaseHTTPRequestHandler):
+              def do_POST(self):
+                  content_length = int(self.headers['Content-Length'])
+                  post_data = self.rfile.read(content_length)
+                  
+                  try:
+                      if self.path == '/prioritize':
+                          self.handle_prioritize(post_data)
+                      elif self.path == '/filter':
+                          self.handle_filter(post_data)
+                      else:
+                          self.send_error(404)
+                  except Exception as e:
+                      print(f"Error: {e}")
+                      self.send_error(500)
+              
+              def handle_prioritize(self, data):
+                  try:
+                      request = json.loads(data.decode('utf-8'))
+                      nodes = request.get('Nodes', {}).get('Items', [])
+                      
+                      # 네트워크 인지 스코어링 시뮬레이션
+                      scores = []
+                      for node in nodes:
+                          node_name = node['metadata']['name']
+                          
+                          # 간단한 네트워크 인지 로직
+                          if 'cluster1' in node_name:
+                              score = 10  # cluster1은 낮은 점수 (문제 있는 노드)
+                          elif 'cluster2' in node_name:
+                              score = 50  # cluster2는 중간 점수
+                          elif 'cluster3' in node_name:
+                              score = 90  # cluster3는 높은 점수 (선호)
+                          else:
+                              score = random.randint(20, 80)
+                          
+                          scores.append({
+                              "Name": node_name,
+                              "Score": score
+                          })
+                          
+                          print(f"Node {node_name} scored: {score}")
+                      
+                      response = {"NodeScores": scores}
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.end_headers()
+                      self.wfile.write(json.dumps(response).encode('utf-8'))
+                      
+                  except Exception as e:
+                      print(f"Prioritize error: {e}")
+                      self.send_error(500)
+              
+              def handle_filter(self, data):
+                  try:
+                      request = json.loads(data.decode('utf-8'))
+                      nodes = request.get('Nodes', {}).get('Items', [])
+                      
+                      # 모든 노드 통과 (필터링 없음)
+                      response = {
+                          "Nodes": {"Items": nodes},
+                          "NodeNames": [node['metadata']['name'] for node in nodes]
+                      }
+                      
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.end_headers()
+                      self.wfile.write(json.dumps(response).encode('utf-8'))
+                      
+                  except Exception as e:
+                      print(f"Filter error: {e}")
+                      self.send_error(500)
+          
+          if __name__ == '__main__':
+              server = HTTPServer(('0.0.0.0', 8080), SchedulerExtender)
+              print("Network-Aware Scheduler Extender starting on port 8080...")
+              print("Prioritization logic: cluster3(90) > cluster2(50) > cluster1(10)")
+              server.serve_forever()
+          EOF
+          
+          python3 /tmp/scheduler_extender.py
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
